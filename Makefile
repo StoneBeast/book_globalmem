@@ -7,7 +7,7 @@
 # 注意: 不同的开发板不同的编译器上述3个环境变量不一定相同,
 #       请参考各开发板的高级用户使用手册
 
-#CROSS_COMPILE=aarch64-linux-gnu-
+CROSS_COMPILE=aarch64-none-linux-gnu-
 KERN_DIR = /home/stoneneast/linux/orangepi-build-next/kernel/orange-pi-5.16-sunxi64
 ARCH=arm64
 CMD = $(wildcard *.mod.cmd)
@@ -21,4 +21,4 @@ clean:
 	make -C $(KERN_DIR) M=`pwd` modules clean
 	rm -rf modules.order
 
-obj-m	+= my_drv.o
+obj-m	+= globalmem.o
