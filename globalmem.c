@@ -3,15 +3,21 @@
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
  * @LastEditors  : Please set LastEditors
- * @LastEditTime : 2024-12-08 00:09:34
+ * @LastEditTime : 2024-12-08 01:07:44
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
+#include "asm/current.h"
+#include "asm/string.h"
 #include "linux/container_of.h"
 #include "linux/device.h"
 #include "linux/device/class.h"
+#include "linux/errno.h"
 #include "linux/mutex.h"
+#include "linux/sched.h"
+#include "linux/sched/signal.h"
 #include "linux/stddef.h"
+#include "linux/wait.h"
 #include <linux/cdev.h>
 #include <linux/export.h>
 #include <linux/fs.h>
@@ -37,7 +43,10 @@ module_param(globalmem_major, int, S_IRUGO);
 struct globalmem_dev {
     struct cdev cdev;
     unsigned char mem[GLOBALMEM_SIZE];
+    unsigned int current_len;
     struct mutex mutex;
+    wait_queue_head_t r_wait;
+    wait_queue_head_t w_wait;
 };
 
 static struct globalmem_dev *globalmem_devp;
@@ -81,55 +90,112 @@ static long globalmem_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 
 static ssize_t globalmem_read(struct file *filp, char __user *buf, size_t size, loff_t *ppos)
 {
-    unsigned long p = *ppos;
     unsigned int count = size;
     int ret = 0;
     struct globalmem_dev *dev = filp->private_data;
-
-    if (p >= GLOBALMEM_SIZE)
-        return 0;
-    if (count > GLOBALMEM_SIZE-p)
-        count = GLOBALMEM_SIZE - p;
+    DECLARE_WAITQUEUE(wait, current);
 
     mutex_lock(&dev->mutex);
+    add_wait_queue(&dev->r_wait, &wait);
 
-    if (copy_to_user(buf, dev->mem + p, count)) {
-        ret = -EFAULT;
-    } else {
-        *ppos += count;
-        ret = count;
+    while (dev->current_len == 0)
+    {
+        if (filp->f_flags & O_NONBLOCK)
+        {
+            ret = -EAGAIN;
+            goto out;
+        }
+        __set_current_state(TASK_INTERRUPTIBLE);
+        mutex_unlock(&dev->mutex);
 
-        printk(KERN_INFO "read %u bytes from %lu\n", count, p);
+        schedule();
+        if(signal_pending(current))
+        {
+            ret = -ERESTARTSYS;
+            goto out2;
+        }
+
+        mutex_lock(&dev->mutex);
     }
 
-    mutex_unlock(&dev->mutex);
+    if (count > dev->current_len)
+    {
+        count = dev->current_len;
+    }
 
+    if (copy_to_user(buf, dev->mem, count)) {
+        ret = -EFAULT;
+        goto out;
+    } else {
+        memcpy(dev->mem, dev->mem+count, dev->current_len-count);
+        dev->current_len -= count;
+        ret = count;
+
+        printk(KERN_INFO "read %u bytes, current_len: %u\n", count, dev->current_len);
+        wake_up_interruptible(&dev->w_wait);
+    }
+
+out:
+    mutex_unlock(&dev->mutex);
+out2:
+    remove_wait_queue(&dev->r_wait, &wait);
+    set_current_state(TASK_RUNNING);
     return ret;
 }
 
 static ssize_t globalmem_write(struct file *filp, const char __user *buf, size_t size, loff_t *ppos)
 {
-    unsigned long p = *ppos;
     unsigned int count = size;
     int ret = 0;
     struct globalmem_dev *dev = filp->private_data;
-
-    if (p >= GLOBALMEM_SIZE)
-        return 0;
-    if (count > GLOBALMEM_SIZE-p)
-        count = GLOBALMEM_SIZE - p;
+    DECLARE_WAITQUEUE(wait, current);
     
     mutex_lock(&dev->mutex);
-    
-    if (copy_from_user(dev->mem+p, buf, count))
+    add_wait_queue(&dev->w_wait, &wait);
+
+    while (dev->current_len == GLOBALMEM_SIZE)
+    {
+        if (filp->f_flags & O_NONBLOCK)
+        {
+            ret = -EAGAIN;
+            goto out;
+        }
+        __set_current_state(TASK_INTERRUPTIBLE);
+        mutex_unlock(&dev->mutex);
+
+        schedule();
+        if(signal_pending(current)) /* 因为被信号唤醒，而不是可写 */
+        {
+            ret = -ERESTARTSYS;
+            goto out2;
+        }
+
+        mutex_lock(&dev->mutex);
+    }
+
+    if (count > GLOBALMEM_SIZE - dev->current_len)
+    {
+        count = GLOBALMEM_SIZE - dev->current_len;
+    }
+
+    if (copy_from_user(dev->mem+dev->current_len, buf, count))
+    {
         ret = -EFAULT;
-    else {
-        *ppos += count;
+        goto out;
+    }
+    else 
+    {
+        dev->current_len += count;
+        printk( KERN_INFO "written %d bytes, current_len: %d\n", count, dev->current_len);
+        wake_up_interruptible(&dev->r_wait);
         ret = count;
     }
     
+out:
     mutex_unlock(&dev->mutex);
-    
+out2:
+    remove_wait_queue(&dev->w_wait, &wait);
+    set_current_state(TASK_RUNNING);
     return ret;
 }
 
@@ -225,7 +291,12 @@ static int __init globalmem_init(void)
 
     for (i = 0; i < DEVICE_NUM; i++)
     {
+        (globalmem_devp+i)->current_len = 0;
+        /* 初始化互斥量 */
         mutex_init(&((globalmem_devp+i)->mutex));
+        /* 初始化等待队列 */
+        init_waitqueue_head(&((globalmem_devp+i)->r_wait));
+        init_waitqueue_head(&((globalmem_devp+i)->w_wait));
         globalmem_setup_cdev(globalmem_devp+i, i);
         device_ent = device_create(cls, NULL, temp_devno++, NULL, "globalmem%d", i);
     }
