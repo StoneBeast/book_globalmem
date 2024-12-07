@@ -3,10 +3,11 @@
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
  * @LastEditors  : Please set LastEditors
- * @LastEditTime : 2024-12-06 18:52:35
+ * @LastEditTime : 2024-12-07 20:29:46
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
+#include "linux/container_of.h"
 #include "linux/device.h"
 #include "linux/device/class.h"
 #include "linux/stddef.h"
@@ -27,6 +28,7 @@
 #define GLOBALMEM_MAJOR     230
 #define GLOBALMEM_SIZE      0x1000
 #define MEM_CLEAR           0x01
+#define DEVICE_NUM          10
 
 static int globalmem_major = GLOBALMEM_MAJOR;
 module_param(globalmem_major, int, S_IRUGO);
@@ -43,7 +45,8 @@ static dev_t devno;
 
 static int globalmem_open(struct inode *inode, struct file *filp)
 {
-    filp->private_data = globalmem_devp;
+    struct globalmem_dev *dev = container_of(inode->i_cdev, struct globalmem_dev, cdev);
+    filp->private_data = dev;
     return 0;
 }
 
@@ -180,13 +183,15 @@ static void globalmem_setup_cdev(struct globalmem_dev *dev, int index)
 static int __init globalmem_init(void)
 {
     int ret;
+    int i;
+    dev_t temp_devno;
     devno = MKDEV(globalmem_major, 0);
 
     /* 申请设备号 */
     if (globalmem_major)
-        ret = register_chrdev_region(devno, 1, "globalmem");
+        ret = register_chrdev_region(devno, DEVICE_NUM, "globalmem");
     else {
-        ret = alloc_chrdev_region(&devno, 0, 1, "globalmem");
+        ret = alloc_chrdev_region(&devno, 0, DEVICE_NUM, "globalmem");
         globalmem_major = MAJOR(devno);
     }
 
@@ -194,19 +199,25 @@ static int __init globalmem_init(void)
         return ret;
 
     /* 申请globalmem_dev空间 */
-    globalmem_devp = kzalloc(sizeof(struct globalmem_dev), GFP_KERNEL);
+    globalmem_devp = kzalloc(sizeof(struct globalmem_dev) * DEVICE_NUM, GFP_KERNEL);
     if (!globalmem_devp) {
         ret = -ENOMEM;
         goto fail_malloc;
     }
 
-    globalmem_setup_cdev(globalmem_devp, 0);
     cls = class_create(THIS_MODULE, "globalmem_class");
-    device_ent = device_create(cls, NULL, devno, NULL, "globalmem1");
+    temp_devno = devno;
+
+    for (i = 0; i < DEVICE_NUM; i++)
+    {
+        globalmem_setup_cdev(globalmem_devp+i, i);
+        device_ent = device_create(cls, NULL, temp_devno++, NULL, "globalmem%d", i);
+    }
+
     return 0;
 
 fail_malloc:
-    unregister_chrdev_region(devno, 1);
+    unregister_chrdev_region(devno, DEVICE_NUM);
     return ret;
 }
 
@@ -214,11 +225,17 @@ module_init(globalmem_init);
 
 static void __exit globalmem_exit(void)
 {
-    cdev_del(&globalmem_devp->cdev);
+    int i;
+    dev_t temp_no = devno;
+
+    for (i = 0; i < DEVICE_NUM; i++)
+    {
+        cdev_del(&(globalmem_devp+i)->cdev);
+        device_destroy(cls, temp_no+i);
+    }
     kfree(globalmem_devp);
-    unregister_chrdev_region(MKDEV(globalmem_major, 0), 1);    
+    unregister_chrdev_region(MKDEV(globalmem_major, 0), DEVICE_NUM);    
     class_destroy(cls);
-    device_destroy(cls, devno);
 }
 
 module_exit(globalmem_exit);
