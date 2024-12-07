@@ -3,13 +3,14 @@
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
  * @LastEditors  : Please set LastEditors
- * @LastEditTime : 2024-12-07 20:29:46
+ * @LastEditTime : 2024-12-08 00:09:34
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
 #include "linux/container_of.h"
 #include "linux/device.h"
 #include "linux/device/class.h"
+#include "linux/mutex.h"
 #include "linux/stddef.h"
 #include <linux/cdev.h>
 #include <linux/export.h>
@@ -36,6 +37,7 @@ module_param(globalmem_major, int, S_IRUGO);
 struct globalmem_dev {
     struct cdev cdev;
     unsigned char mem[GLOBALMEM_SIZE];
+    struct mutex mutex;
 };
 
 static struct globalmem_dev *globalmem_devp;
@@ -61,7 +63,12 @@ static long globalmem_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 
     switch (cmd) {
     case MEM_CLEAR:
+        
+        mutex_lock(&dev->mutex);
+        
         memset(dev->mem, 0, GLOBALMEM_SIZE);
+        
+        mutex_unlock(&dev->mutex);
         printk(KERN_INFO "globalmem si set to zero\n");
         break;
 
@@ -84,6 +91,8 @@ static ssize_t globalmem_read(struct file *filp, char __user *buf, size_t size, 
     if (count > GLOBALMEM_SIZE-p)
         count = GLOBALMEM_SIZE - p;
 
+    mutex_lock(&dev->mutex);
+
     if (copy_to_user(buf, dev->mem + p, count)) {
         ret = -EFAULT;
     } else {
@@ -92,6 +101,8 @@ static ssize_t globalmem_read(struct file *filp, char __user *buf, size_t size, 
 
         printk(KERN_INFO "read %u bytes from %lu\n", count, p);
     }
+
+    mutex_unlock(&dev->mutex);
 
     return ret;
 }
@@ -107,14 +118,18 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf, size_t
         return 0;
     if (count > GLOBALMEM_SIZE-p)
         count = GLOBALMEM_SIZE - p;
-
+    
+    mutex_lock(&dev->mutex);
+    
     if (copy_from_user(dev->mem+p, buf, count))
         ret = -EFAULT;
     else {
         *ppos += count;
         ret = count;
     }
-
+    
+    mutex_unlock(&dev->mutex);
+    
     return ret;
 }
 
@@ -210,6 +225,7 @@ static int __init globalmem_init(void)
 
     for (i = 0; i < DEVICE_NUM; i++)
     {
+        mutex_init(&((globalmem_devp+i)->mutex));
         globalmem_setup_cdev(globalmem_devp+i, i);
         device_ent = device_create(cls, NULL, temp_devno++, NULL, "globalmem%d", i);
     }
