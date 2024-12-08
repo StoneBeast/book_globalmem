@@ -3,10 +3,11 @@
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
  * @LastEditors  : Please set LastEditors
- * @LastEditTime : 2024-12-08 01:07:44
+ * @LastEditTime : 2024-12-08 17:42:54
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
+#include "asm-generic/poll.h"
 #include "asm/current.h"
 #include "asm/string.h"
 #include "linux/container_of.h"
@@ -14,6 +15,7 @@
 #include "linux/device/class.h"
 #include "linux/errno.h"
 #include "linux/mutex.h"
+#include "linux/poll.h"
 #include "linux/sched.h"
 #include "linux/sched/signal.h"
 #include "linux/stddef.h"
@@ -238,7 +240,28 @@ static loff_t globalmem_llseek(struct file *filp, loff_t offset, int orig)
     return ret;
 }
 
+static __poll_t globalmem_poll(struct file *filp, struct poll_table_struct *wait)
+{
+    unsigned int mask = 0;
+    struct globalmem_dev *dev = filp->private_data;
 
+    mutex_lock(&dev->mutex);
+    poll_wait(filp, &dev->r_wait, wait);
+    poll_wait(filp, &dev->w_wait, wait);
+
+    if (dev->current_len != 0)
+    {
+        mask |= POLLIN | POLLRDNORM;
+    }
+
+    if (dev->current_len != GLOBALMEM_SIZE)
+    {
+        mask |= POLLOUT | POLLWRNORM;
+    }
+
+    mutex_unlock(&dev->mutex);
+    return mask;
+}
 
 static const struct file_operations globalmem_fops = {
     .owner = THIS_MODULE,
@@ -248,6 +271,7 @@ static const struct file_operations globalmem_fops = {
     .unlocked_ioctl = globalmem_ioctl,
     .open = globalmem_open,
     .release = globalmem_release,
+    .poll = globalmem_poll,
 };
 
 static void globalmem_setup_cdev(struct globalmem_dev *dev, int index)
