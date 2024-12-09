@@ -3,11 +3,13 @@
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
  * @LastEditors  : Please set LastEditors
- * @LastEditTime : 2024-12-08 17:42:54
+ * @LastEditTime : 2024-12-09 10:29:02
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
 #include "asm-generic/poll.h"
+#include "asm-generic/siginfo.h"
+#include "asm-generic/signal.h"
 #include "asm/current.h"
 #include "asm/string.h"
 #include "linux/container_of.h"
@@ -49,6 +51,7 @@ struct globalmem_dev {
     struct mutex mutex;
     wait_queue_head_t r_wait;
     wait_queue_head_t w_wait;
+    struct fasync_struct *async_queue;
 };
 
 static struct globalmem_dev *globalmem_devp;
@@ -60,11 +63,6 @@ static int globalmem_open(struct inode *inode, struct file *filp)
 {
     struct globalmem_dev *dev = container_of(inode->i_cdev, struct globalmem_dev, cdev);
     filp->private_data = dev;
-    return 0;
-}
-
-static int globalmem_release(struct inode *inode, struct file *filp)
-{
     return 0;
 }
 
@@ -190,6 +188,13 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf, size_t
         dev->current_len += count;
         printk( KERN_INFO "written %d bytes, current_len: %d\n", count, dev->current_len);
         wake_up_interruptible(&dev->r_wait);
+
+        if (dev->async_queue)
+        {
+            kill_fasync(&dev->async_queue, SIGIO, POLL_IN);
+            printk(KERN_DEBUG "%s kill SIGIO\n", __func__);
+        }
+
         ret = count;
     }
     
@@ -263,6 +268,19 @@ static __poll_t globalmem_poll(struct file *filp, struct poll_table_struct *wait
     return mask;
 }
 
+int globalmem_fasync(int fd, struct file *filp, int mode)
+{
+    struct globalmem_dev *dev = filp->private_data;
+
+    return fasync_helper(fd, filp, mode, &dev->async_queue);
+}
+
+static int globalmem_release(struct inode *inode, struct file *filp)
+{
+    globalmem_fasync(-1, filp, 0);
+    return 0;
+}
+
 static const struct file_operations globalmem_fops = {
     .owner = THIS_MODULE,
     .llseek = globalmem_llseek,
@@ -272,6 +290,7 @@ static const struct file_operations globalmem_fops = {
     .open = globalmem_open,
     .release = globalmem_release,
     .poll = globalmem_poll,
+    .fasync = globalmem_fasync,
 };
 
 static void globalmem_setup_cdev(struct globalmem_dev *dev, int index)
