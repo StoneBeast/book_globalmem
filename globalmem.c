@@ -3,7 +3,7 @@
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
  * @LastEditors  : Please set LastEditors
- * @LastEditTime : 2024-12-09 10:29:02
+ * @LastEditTime : 2024-12-09 13:53:50
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
@@ -191,6 +191,7 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf, size_t
 
         if (dev->async_queue)
         {
+            /*产生异步信号: 有数据io时，发送SIGIO信号,有数据写入设置POLL_IN(可读) */
             kill_fasync(&dev->async_queue, SIGIO, POLL_IN);
             printk(KERN_DEBUG "%s kill SIGIO\n", __func__);
         }
@@ -272,6 +273,7 @@ int globalmem_fasync(int fd, struct file *filp, int mode)
 {
     struct globalmem_dev *dev = filp->private_data;
 
+    /* 处理FASYNC标志变更的函数(初始化struct fasync_struct结构体) */
     return fasync_helper(fd, filp, mode, &dev->async_queue);
 }
 
