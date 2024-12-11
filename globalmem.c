@@ -3,7 +3,7 @@
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
  * @LastEditors  : stoneBeast
- * @LastEditTime : 2024-12-11 10:02:09
+ * @LastEditTime : 2024-12-11 19:00:57
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
@@ -11,7 +11,9 @@
 #include "linux/device.h"
 #include "linux/device/class.h"
 #include "linux/errno.h"
+#include "linux/miscdevice.h"
 #include "linux/mutex.h"
+#include "linux/platform_device.h"
 #include "linux/poll.h"
 #include "linux/sched.h"
 #include "linux/sched/signal.h"
@@ -34,7 +36,7 @@
 #define GLOBALMEM_MAJOR     230
 #define GLOBALMEM_SIZE      0x1000
 #define MEM_CLEAR           0x01
-#define DEVICE_NUM          10
+#define DEVICE_NUM          1
 
 static int globalmem_major = GLOBALMEM_MAJOR;
 module_param(globalmem_major, int, S_IRUGO);
@@ -47,23 +49,22 @@ struct globalmem_dev {
     wait_queue_head_t r_wait;
     wait_queue_head_t w_wait;
     struct fasync_struct *async_queue;
+    struct miscdevice miscdev;
 };
 
 static struct globalmem_dev *globalmem_devp;
-static struct class *cls;
-static struct device* device_ent;
-static dev_t devno;
 
 static int globalmem_open(struct inode *inode, struct file *filp)
 {
-    struct globalmem_dev *dev = container_of(inode->i_cdev, struct globalmem_dev, cdev);
-    filp->private_data = dev;
+    //  struct globalmem_dev *dev = container_of(filp->private_data, struct globalmem_dev, miscdev);
+
+    // filp->private_data = dev;
     return 0;
 }
 
 static long globalmem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-    struct globalmem_dev *dev = filp->private_data;
+    struct globalmem_dev *dev = container_of(filp->private_data, struct globalmem_dev, miscdev);
 
     switch (cmd) {
     case MEM_CLEAR:
@@ -87,11 +88,13 @@ static ssize_t globalmem_read(struct file *filp, char __user *buf, size_t size, 
 {
     unsigned int count = size;
     int ret = 0;
-    struct globalmem_dev *dev = filp->private_data;
+    struct globalmem_dev *dev = container_of(filp->private_data, struct globalmem_dev, miscdev);
     DECLARE_WAITQUEUE(wait, current);
 
     mutex_lock(&dev->mutex);
     add_wait_queue(&dev->r_wait, &wait);
+
+    printk("miscname: %s\n", dev->miscdev.name);
 
     while (dev->current_len == 0)
     {
@@ -142,7 +145,7 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf, size_t
 {
     unsigned int count = size;
     int ret = 0;
-    struct globalmem_dev *dev = filp->private_data;
+    struct globalmem_dev *dev = container_of(filp->private_data, struct globalmem_dev, miscdev);
     DECLARE_WAITQUEUE(wait, current);
     
     mutex_lock(&dev->mutex);
@@ -244,7 +247,7 @@ static loff_t globalmem_llseek(struct file *filp, loff_t offset, int orig)
 static __poll_t globalmem_poll(struct file *filp, struct poll_table_struct *wait)
 {
     unsigned int mask = 0;
-    struct globalmem_dev *dev = filp->private_data;
+    struct globalmem_dev *dev = container_of(filp->private_data, struct globalmem_dev, miscdev);
 
     mutex_lock(&dev->mutex);
     poll_wait(filp, &dev->r_wait, wait);
@@ -266,7 +269,7 @@ static __poll_t globalmem_poll(struct file *filp, struct poll_table_struct *wait
 
 int globalmem_fasync(int fd, struct file *filp, int mode)
 {
-    struct globalmem_dev *dev = filp->private_data;
+    struct globalmem_dev *dev = container_of(filp->private_data, struct globalmem_dev, miscdev);
 
     /* 处理FASYNC标志变更的函数(初始化struct fasync_struct结构体) */
     return fasync_helper(fd, filp, mode, &dev->async_queue);
@@ -290,81 +293,52 @@ static const struct file_operations globalmem_fops = {
     .fasync = globalmem_fasync,
 };
 
-static void globalmem_setup_cdev(struct globalmem_dev *dev, int index)
-{
-    int err, devno = MKDEV(globalmem_major, index);
-
-    cdev_init(&dev->cdev, &globalmem_fops);
-    dev->cdev.owner = THIS_MODULE;
-    err = cdev_add(&dev->cdev, devno, 1);
-    if (err)
-        printk(KERN_NOTICE "Error %d adding globalmem%d", err, index);
-}
-
-static int __init globalmem_init(void)
+static int globalmem_probe(struct platform_device *pdev)
 {
     int ret;
-    int i;
-    dev_t temp_devno;
-    devno = MKDEV(globalmem_major, 0);
-
-    /* 申请设备号 */
-    if (globalmem_major)
-        ret = register_chrdev_region(devno, DEVICE_NUM, "globalmem");
-    else {
-        ret = alloc_chrdev_region(&devno, 0, DEVICE_NUM, "globalmem");
-        globalmem_major = MAJOR(devno);
-    }
-
-    if (ret < 0)    /* 申请失败 */
-        return ret;
 
     /* 申请globalmem_dev空间 */
     globalmem_devp = kzalloc(sizeof(struct globalmem_dev) * DEVICE_NUM, GFP_KERNEL);
     if (!globalmem_devp) {
         ret = -ENOMEM;
-        goto fail_malloc;
+        return ret;
     }
 
-    cls = class_create(THIS_MODULE, "globalmem_class");
-    temp_devno = devno;
+    globalmem_devp->miscdev.minor = MISC_DYNAMIC_MINOR;
+    globalmem_devp->miscdev.name = "globalmem";
+    globalmem_devp->miscdev.fops = &globalmem_fops;
 
-    for (i = 0; i < DEVICE_NUM; i++)
+    mutex_init(&globalmem_devp->mutex);
+    /* 初始化等待队列 */
+    init_waitqueue_head(&globalmem_devp->r_wait);
+    init_waitqueue_head(&globalmem_devp->w_wait);
+
+    ret = misc_register(&globalmem_devp->miscdev);
+    if (ret < 0)
     {
-        (globalmem_devp+i)->current_len = 0;
-        /* 初始化互斥量 */
-        mutex_init(&((globalmem_devp+i)->mutex));
-        /* 初始化等待队列 */
-        init_waitqueue_head(&((globalmem_devp+i)->r_wait));
-        init_waitqueue_head(&((globalmem_devp+i)->w_wait));
-        globalmem_setup_cdev(globalmem_devp+i, i);
-        device_ent = device_create(cls, NULL, temp_devno++, NULL, "globalmem%d", i);
+        return ret;
     }
 
     return 0;
-
-fail_malloc:
-    unregister_chrdev_region(devno, DEVICE_NUM);
-    return ret;
 }
 
-module_init(globalmem_init);
-
-static void __exit globalmem_exit(void)
+static int globalmem_remove(struct platform_device *pdev)
 {
-    int i;
-    dev_t temp_no = devno;
-
-    for (i = 0; i < DEVICE_NUM; i++)
-    {
-        cdev_del(&(globalmem_devp+i)->cdev);
-        device_destroy(cls, temp_no+i);
-    }
-    kfree(globalmem_devp);
-    unregister_chrdev_region(MKDEV(globalmem_major, 0), DEVICE_NUM);    
-    class_destroy(cls);
+    struct globalmem_dev *gl = platform_get_drvdata(pdev);
+    misc_deregister(&gl->miscdev);
+    
+    return 0;
 }
 
-module_exit(globalmem_exit);
+static struct platform_driver globalmem_dirver = {
+    .driver = {
+        .name = "globalmem",
+        .owner = THIS_MODULE,
+    },
+    .probe = globalmem_probe,
+    .remove = globalmem_remove,
+};
+
+module_platform_driver(globalmem_dirver);
 
 MODULE_LICENSE("GPL v2");
