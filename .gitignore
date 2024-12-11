@@ -2,3 +2,7 @@
 *.json
 *.ko
 test
+*.cmd
+*.d
+*.o
+*.mod
