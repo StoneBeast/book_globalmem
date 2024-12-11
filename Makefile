@@ -22,4 +22,4 @@ clean:
 	rm -rf modules.order
 	rm -f *.ko;
 
-obj-m	:= globalmem.o second.o
+obj-m	:= globalmem.o second.o globalmem_dev.o
