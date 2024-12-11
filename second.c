@@ -3,7 +3,7 @@
  * @Date         : 2024-12-10 17:20:15
  * @Encoding     : UTF-8
  * @LastEditors  : stoneBeast
- * @LastEditTime : 2024-12-11 10:32:58
+ * @LastEditTime : 2024-12-11 10:47:22
  * @Description  : 《linux设备驱动开发详解》中second驱动
  */
 
@@ -42,6 +42,7 @@ static struct device *second_dev;
 
 static void second_timer_handler(struct timer_list *arg)
 {
+    /* 修改当前周期超时时间 */
     mod_timer(&second_devp->s_timer, jiffies+HZ);
     atomic_inc(&second_devp->counter);
 
@@ -50,9 +51,12 @@ static void second_timer_handler(struct timer_list *arg)
 
 static int second_open(struct inode *inode, struct file *filp)
 {
+    /* 初始化定时器 */
     timer_setup(&second_devp->s_timer, &second_timer_handler, 0);
+    /* 设置当前周期超时时间 */
     second_devp->s_timer.expires = jiffies + HZ;
 
+    /* 添加进内核，启动定时器 */
     add_timer(&second_devp->s_timer);
     atomic_set(&second_devp->counter, 0);
 
@@ -76,6 +80,7 @@ static ssize_t second_read(struct file *filp, char __user *buf, size_t size, lof
 
 static int second_release(struct inode *inode, struct file *filp)
 {
+    /* 删除定时器 */
     del_timer(&second_devp->s_timer);
 
     return 0;
