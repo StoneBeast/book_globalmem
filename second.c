@@ -3,7 +3,7 @@
  * @Date         : 2024-12-10 17:20:15
  * @Encoding     : UTF-8
  * @LastEditors  : stoneBeast
- * @LastEditTime : 2024-12-11 10:12:51
+ * @LastEditTime : 2024-12-11 10:32:58
  * @Description  : 《linux设备驱动开发详解》中second驱动
  */
 
@@ -27,7 +27,7 @@
 #include "linux/types.h"
 
 #define SECOND_MAJOR    248
-static int second_major = SECOND_MAJOR;
+static int second_major = 0;
 module_param(second_major, int, S_IRUGO);
 
 struct second_dev {
