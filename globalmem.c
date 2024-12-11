@@ -2,16 +2,11 @@
  * @Author       : stoneBeast
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
- * @LastEditors  : Please set LastEditors
- * @LastEditTime : 2024-12-09 13:53:50
+ * @LastEditors  : stoneBeast
+ * @LastEditTime : 2024-12-11 10:02:09
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
-#include "asm-generic/poll.h"
-#include "asm-generic/siginfo.h"
-#include "asm-generic/signal.h"
-#include "asm/current.h"
-#include "asm/string.h"
 #include "linux/container_of.h"
 #include "linux/device.h"
 #include "linux/device/class.h"
