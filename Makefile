@@ -18,7 +18,8 @@ all:
 	rm -f *.o *.mod *.mod.c Module.symvers modules.order
 
 clean:
-	make -C $(KERN_DIR) M=`pwd` modules clean
+	make -C $(KERN_DIR) M=`pwd` clean
 	rm -rf modules.order
+	rm -f *.ko;
 
-obj-m	+= globalmem.o
+obj-m	:= globalmem.o second.o
