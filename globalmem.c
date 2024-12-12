@@ -3,7 +3,7 @@
  * @Date         : 2024-12-06 15:02:51
  * @Encoding     : UTF-8
  * @LastEditors  : stoneBeast
- * @LastEditTime : 2024-12-11 19:00:57
+ * @LastEditTime : 2024-12-12 09:41:23
  * @Description  : 《linux设备驱动开发详解》中的globalmem驱动程序
  */
 
@@ -56,6 +56,7 @@ static struct globalmem_dev *globalmem_devp;
 
 static int globalmem_open(struct inode *inode, struct file *filp)
 {
+    /* linux在调用 misc_open()时,会将miscdev赋值给filp->private_data */
     //  struct globalmem_dev *dev = container_of(filp->private_data, struct globalmem_dev, miscdev);
 
     // filp->private_data = dev;
